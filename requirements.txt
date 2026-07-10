@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+google-genai
+python-multipart
+pydantic
+pyjwt[crypto]
+pypdfium2
+pillow
+httpx
