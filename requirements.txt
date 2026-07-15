@@ -6,4 +6,5 @@ pydantic
 pyjwt[crypto]
 pypdfium2
 pillow
+pillow-heif
 httpx

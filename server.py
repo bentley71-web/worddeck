@@ -36,6 +36,13 @@ def _load_dotenv():
 
 _load_dotenv()
 
+# 讓 PIL 能開 iPhone 的 HEIC/HEIF 照片(相簿選的照片常是這個格式)
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except Exception:
+    pass
+
 app = FastAPI()
 
 
@@ -257,7 +264,7 @@ def _prep_image_bytes(data: bytes) -> bytes:
         img = Image.open(io.BytesIO(data))
         img.load()
     except Exception:
-        raise HTTPException(status_code=422, detail="圖片無法讀取(iPhone 的 HEIC 請先轉成 JPG)")
+        raise HTTPException(status_code=422, detail="圖片無法讀取(檔案可能損壞或格式不支援)")
     if img.mode != "RGB":
         img = img.convert("RGB")
     w, h = img.size
