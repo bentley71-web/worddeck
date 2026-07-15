@@ -60,8 +60,10 @@ SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
 _JWKS_URL = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json" if SUPABASE_URL else ""
 _jwk_client = jwt.PyJWKClient(_JWKS_URL) if _JWKS_URL else None
 DAILY_EXTRACT_LIMIT = int(os.environ.get("DAILY_EXTRACT_LIMIT", "50"))
-MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "15")) * 1024 * 1024
-MAX_PDF_PAGES = int(os.environ.get("MAX_PDF_PAGES", "20"))
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "50")) * 1024 * 1024   # 每檔安全上限(防當機,非使用者痛點)
+MAX_PDF_PAGES = int(os.environ.get("MAX_PDF_PAGES", "300"))                    # 高安全上限;實際靠分批處理,不再 20 頁就擋
+MAX_IMAGE_DIM = int(os.environ.get("MAX_IMAGE_DIM", "2000"))                   # 送 Gemini 前把長邊縮到這個像素
+PDF_BATCH_PAGES = int(os.environ.get("PDF_BATCH_PAGES", "8"))                  # PDF/多圖每批送幾張給 Gemini
 
 ALLOWED_IMAGE_MIME = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 
@@ -227,6 +229,8 @@ EXTRACT_SYSTEM = (
     "3) 原文沒有中文的,補上最常用的繁體中文解釋,並把 ai_filled 設為 true。"
     "4) pos 填詞性(n./v./adj. 等),不確定就空字串;example 填一個簡短例句,沒有就空字串。"
     "5) 只輸出真正的英文單字/片語,忽略頁碼、標題、日期等雜訊。"
+    "6) 只根據輸入實際出現的內容輸出。如果輸入是空白、模糊、或沒有清楚可辨識的英文單字,items 直接回空陣列,"
+    "絕對不要自行編造或憑空生成任何單字。"
 )
 
 
@@ -245,55 +249,123 @@ def _dedupe(items: list[dict]) -> list[dict]:
     return out
 
 
+def _prep_image_bytes(data: bytes) -> bytes:
+    """開圖 → 轉 RGB → 長邊縮到 MAX_IMAGE_DIM → 重編 JPEG。讓大照片不會超過 Gemini 的請求上限。"""
+    import io
+    from PIL import Image
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+    except Exception:
+        raise HTTPException(status_code=422, detail="圖片無法讀取(iPhone 的 HEIC 請先轉成 JPG)")
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    w, h = img.size
+    longest = max(w, h)
+    if longest > MAX_IMAGE_DIM:
+        s = MAX_IMAGE_DIM / longest
+        img = img.resize((max(1, int(w * s)), max(1, int(h * s))))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
+def _pdf_to_page_images(data: bytes) -> list[bytes]:
+    """把 PDF 每頁 render 成 JPEG(縮到 MAX_IMAGE_DIM)。任意頁數 → 之後分批送 Gemini。"""
+    import io
+    import pypdfium2 as pdfium
+    try:
+        pdf = pdfium.PdfDocument(data)
+    except Exception:
+        raise HTTPException(status_code=422, detail="PDF 讀取失敗,檔案可能損壞")
+    n = len(pdf)
+    if n > MAX_PDF_PAGES:
+        raise HTTPException(status_code=413, detail=f"PDF 頁數過多({n} 頁,超過安全上限 {MAX_PDF_PAGES})")
+    out = []
+    for i in range(n):
+        pil = pdf[i].render(scale=2.0).to_pil()
+        w, h = pil.size
+        longest = max(w, h)
+        if longest > MAX_IMAGE_DIM:
+            s = MAX_IMAGE_DIM / longest
+            pil = pil.resize((max(1, int(w * s)), max(1, int(h * s))))
+        buf = io.BytesIO()
+        pil.convert("RGB").save(buf, format="JPEG", quality=85)
+        out.append(buf.getvalue())
+    return out
+
+
+def _safe_extract(clients, parts):
+    """包住 Gemini 呼叫:成功回 (items, None);失敗回 ([], 中文原因)。永不讓例外變成 500。"""
+    try:
+        return _extract_from_parts(clients, parts), None
+    except Exception as e:
+        msg = str(e).lower()
+        if "safety" in msg or "blocked" in msg or "prohibited" in msg:
+            return [], "有一批內容被 Gemini 安全過濾擋下"
+        return [], "有一批 Gemini 無法辨識(可能太模糊)"
+
+
 @app.post("/api/extract")
 async def api_extract(
     ctx: AuthCtx = Depends(require_user),
     text: str = Form(default=""),
-    file: UploadFile = File(default=None),
+    files: list[UploadFile] = File(default=None),
 ):
     consume_quota(ctx)
     clients = gemini_clients()
+    items: list[dict] = []
+    errors: list[str] = []
 
-    # ---- 檔案(圖片 / PDF)----
-    if file is not None:
-        data = await file.read()
-        if len(data) > MAX_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail=f"檔案太大(上限 {MAX_UPLOAD_BYTES // (1024*1024)}MB)")
-        mime = (file.content_type or "").lower()
-
-        if mime in ALLOWED_IMAGE_MIME:
-            part = types.Part.from_bytes(data=data, mime_type="image/jpeg" if mime == "image/jpg" else mime)
-            items = _extract_from_parts(clients, [part])
-        elif mime == "application/pdf":
+    # ---- 檔案(可一次多個;圖片與 PDF 都先轉成 JPEG,再分批送 Gemini)----
+    if files:
+        images: list[bytes] = []
+        for f in files:
+            data = await f.read()
+            if not data:
+                continue
+            if len(data) > MAX_UPLOAD_BYTES:
+                errors.append(f"{f.filename or '檔案'}:太大(上限 {MAX_UPLOAD_BYTES // (1024*1024)}MB)")
+                continue
+            mime = (f.content_type or "").lower()
             try:
-                import pypdfium2 as pdfium
-                pdf = pdfium.PdfDocument(data)
-                pages = len(pdf)
+                if mime == "application/pdf":
+                    images.extend(_pdf_to_page_images(data))
+                elif mime.startswith("image/"):
+                    images.append(_prep_image_bytes(data))
+                else:
+                    errors.append(f"{f.filename or '檔案'}:不支援的格式(要圖片或 PDF)")
+            except HTTPException as he:
+                errors.append(f"{f.filename or '檔案'}:{he.detail}")
             except Exception:
-                raise HTTPException(status_code=422, detail="PDF 讀取失敗,檔案可能損壞")
-            if pages > MAX_PDF_PAGES:
-                raise HTTPException(status_code=413, detail=f"PDF 頁數太多({pages} 頁,上限 {MAX_PDF_PAGES} 頁),請拆開再上傳")
-            part = types.Part.from_bytes(data=data, mime_type="application/pdf")
-            items = _extract_from_parts(clients, [part])
-        else:
-            raise HTTPException(status_code=415, detail="只支援 PNG/JPG/WEBP 圖片或 PDF")
+                errors.append(f"{f.filename or '檔案'}:讀取失敗")
+
+        for i in range(0, len(images), PDF_BATCH_PAGES):
+            batch = images[i:i + PDF_BATCH_PAGES]
+            parts = [types.Part.from_bytes(data=b, mime_type="image/jpeg") for b in batch]
+            got, err = _safe_extract(clients, parts)
+            items += got
+            if err:
+                errors.append(err)
 
     # ---- 純文字 / CSV ----
     elif text.strip():
         lines = [l for l in text.splitlines() if l.strip()]
-        items = []
-        # 太長就分批,避免輸出被截斷;之後合併去重
         CHUNK = 150
         for i in range(0, len(lines), CHUNK):
-            chunk = "\n".join(lines[i:i + CHUNK])
-            items += _extract_from_parts(clients, [chunk])
+            got, err = _safe_extract(clients, ["\n".join(lines[i:i + CHUNK])])
+            items += got
+            if err:
+                errors.append(err)
     else:
         raise HTTPException(status_code=400, detail="請提供文字或上傳檔案")
 
     items = _dedupe(items)
     if not items:
-        raise HTTPException(status_code=422, detail="找不到任何英文單字,換一份清楚一點的清單或照片試試")
-    return {"items": items}
+        detail = "找不到任何英文單字"
+        detail += "(" + ";".join(errors[:3]) + ")" if errors else ",換一份清楚一點的清單或照片試試"
+        raise HTTPException(status_code=422, detail=detail)
+    return {"items": items, "warnings": errors[:5]}
 
 
 @app.post("/api/smart-distractors")

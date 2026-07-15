@@ -11,6 +11,8 @@ services:
       - key: DEV_ALLOW_NO_AUTH
         value: "1"           # 前端是本機模式(無登入),後端跳過驗證
       - key: MAX_UPLOAD_MB
-        value: "15"
+        value: "50"          # 每檔安全上限(防當機),大圖會自動縮小
       - key: MAX_PDF_PAGES
-        value: "20"
+        value: "300"         # 高安全上限;PDF 靠分頁分批處理,不再 20 頁就擋
+      - key: PDF_BATCH_PAGES
+        value: "8"

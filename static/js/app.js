@@ -116,19 +116,24 @@ function renderImport() {
   wrap.append(el("h2", { class: "text-lg font-semibold mb-1" }, "新增單字本"));
 
   const paste = el("textarea", { class: "w-full border rounded-lg px-3 py-2 h-40", placeholder: "一行一個單字,英文和中文用空格/逗號/Tab 隔開,例如:\nresilient  有韌性的\nambiguous  模稜兩可的\n(只有英文也行,中文可之後補或用 AI)" });
-  const fileInput = el("input", { type: "file", accept: "image/png,image/jpeg,image/webp,application/pdf", class: "block" });
-  const camInput = el("input", { type: "file", accept: "image/*", capture: "environment", class: "block" });
+  const fileInput = el("input", { type: "file", accept: "image/*,application/pdf", multiple: true, class: "block" });
+  const camInput = el("input", { type: "file", accept: "image/*", capture: "environment", multiple: true, class: "block" });
   const result = el("div", { class: "mt-4" });
 
-  async function doExtract(form) {
+  async function doExtract(form, count = 1) {
     result.innerHTML = "";
-    result.append(el("p", { class: "text-slate-400" }, "AI 辨識中…(需要 Gemini 金鑰,可能要幾秒)"));
+    result.append(el("p", { class: "text-slate-400" }, `AI 辨識 ${count} 個檔案中…(多檔或多頁 PDF 會久一點)`));
     try {
       const data = await api("/api/extract", { form });
       renderPreview(result, data.items);
+      if (data.warnings && data.warnings.length) {
+        result.insertBefore(
+          el("div", { class: "text-xs text-amber-700 border border-amber-200 bg-amber-50 rounded p-2 mb-2" }, "部分沒處理成功:" + data.warnings.join(";")),
+          result.firstChild);
+      }
     } catch (e) {
       result.innerHTML = "";
-      result.append(el("p", { class: "text-red-500" }, "辨識失敗:" + e.message + "(沒設 Gemini 金鑰的話,改用上面「直接匯入」)"));
+      result.append(el("p", { class: "text-red-500" }, "辨識失敗:" + e.message + "(純文字清單可改用上面「直接匯入」,不需金鑰)"));
     }
   }
 
@@ -149,22 +154,24 @@ function renderImport() {
         } }, "用 AI 整理(補中文/例句)"))),
     el("hr"),
     el("div", {},
-      el("div", { class: "font-medium mb-1" }, "② 上傳檔案(PDF / 圖片 / GoodNotes)— 用 AI 辨識"),
+      el("div", { class: "font-medium mb-1" }, "② 上傳檔案(PDF / 圖片 / GoodNotes,可一次選多個)— 用 AI 辨識"),
       el("p", { class: "text-xs text-slate-400 mb-1" }, "圖片/PDF 會傳給 Google Gemini 辨識,需先在 .env 設 Gemini 金鑰。"),
       fileInput,
       el("button", { class: "mt-2 bg-blue-600 text-white rounded-lg px-4 py-2 text-sm", onclick: () => {
-        if (!fileInput.files[0]) return toast("先選一個檔案");
-        const f = new FormData(); f.append("file", fileInput.files[0]);
-        doExtract(f);
+        if (!fileInput.files.length) return toast("先選一或多個檔案");
+        const f = new FormData();
+        for (const file of fileInput.files) f.append("files", file);
+        doExtract(f, fileInput.files.length);
       } }, "辨識檔案")),
     el("hr"),
     el("div", {},
       el("div", { class: "font-medium mb-1" }, "③ 拍照 — 用 AI 辨識"),
       camInput,
       el("button", { class: "mt-2 bg-blue-600 text-white rounded-lg px-4 py-2 text-sm", onclick: () => {
-        if (!camInput.files[0]) return toast("先拍一張照片");
-        const f = new FormData(); f.append("file", camInput.files[0]);
-        doExtract(f);
+        if (!camInput.files.length) return toast("先拍照片");
+        const f = new FormData();
+        for (const file of camInput.files) f.append("files", file);
+        doExtract(f, camInput.files.length);
       } }, "辨識照片")),
     result));
 }
