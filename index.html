@@ -4,14 +4,63 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
   <title>WordDeck — 單字考卷 + 間隔複習</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    body { background: #f8fafc; color: #0f172a; -webkit-tap-highlight-color: transparent; }
-    input:focus, textarea:focus { outline: 2px solid #2563eb; outline-offset: 0; }
+    :root {
+      --bg: #fafafa; --surface: #ffffff; --border: #ececef;
+      --text: #18181b; --muted: #6b7280; --faint: #9ca3af;
+      --brand: #5b5bd6; --brand-hover: #4f4fca;
+    }
+    * { -webkit-tap-highlight-color: transparent; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    }
+    h1, h2, h3 { letter-spacing: -0.011em; }
+    input, textarea, select, button { font-family: inherit; }
+    input:focus, textarea:focus {
+      outline: none; border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(91,91,214,.15);
+    }
+    ::placeholder { color: #b8bcc4; }
+
+    /* buttons */
+    .btn { display:inline-flex; align-items:center; justify-content:center; gap:.45rem;
+      font-weight:600; border-radius:.625rem; transition:background .15s ease, color .15s ease, transform .1s ease;
+      cursor:pointer; white-space:nowrap; line-height:1.2; }
+    .btn:active { transform: scale(.97); }
+    .btn:disabled { opacity:.5; pointer-events:none; }
+    .btn-primary { background:var(--brand); color:#fff; }
+    .btn-primary:hover { background:var(--brand-hover); }
+    .btn-secondary { background:#fff; color:var(--text); border:1px solid var(--border); }
+    .btn-secondary:hover { background:#f4f4f6; }
+    .btn-ghost { background:transparent; color:var(--muted); }
+    .btn-ghost:hover { background:#f1f1f4; color:var(--text); }
+    .btn-danger { background:transparent; color:var(--faint); }
+    .btn-danger:hover { background:#fef2f2; color:#e11d48; }
+
+    /* surfaces */
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:.875rem;
+      box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+    .chip { display:inline-flex; align-items:center; gap:.3rem; font-size:.75rem; font-weight:600;
+      padding:.2rem .55rem; border-radius:9999px; line-height:1.1; }
+
+    /* brand color helpers (robust vs Tailwind-CDN arbitrary CSS-var values) */
+    .brand-text { color: var(--brand); }
+    .brand-bg { background: var(--brand); }
+    .brand-border { border-color: var(--brand) !important; }
+
+    .fade-in { animation: fade .22s ease; }
+    @keyframes fade { from { opacity:0; transform: translateY(4px); } to { opacity:1; transform:none; } }
   </style>
 </head>
 <body>
   <div id="app"></div>
-  <script type="module" src="/static/js/app.js?v=7"></script>
+  <script type="module" src="/static/js/app.js?v=8"></script>
 </body>
 </html>
