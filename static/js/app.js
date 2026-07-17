@@ -1,5 +1,5 @@
-import * as db from "./db.js?v=5";
-import { buildQuestions, newWordBudget } from "./quiz.js?v=5";
+import * as db from "./db.js?v=7";
+import { buildQuestions, newWordBudget } from "./quiz.js?v=7";
 
 const REQUEUE_CAP = 2; // a wrong word re-appears at most this many times per session
 const app = () => document.getElementById("app");
@@ -95,7 +95,8 @@ async function renderLibrary() {
       el("div", { class: "flex-1", onclick: () => cb.click() },
         el("div", { class: "font-medium" }, d.name),
         el("div", { class: "text-sm text-slate-500" }, `${d.cardCount} 字`)),
-      el("button", { class: "text-slate-300 hover:text-red-500", onclick: async () => {
+      el("button", { class: "text-sm text-slate-400 hover:text-blue-600 shrink-0", onclick: () => renderDeckDetail(d.id) }, "查看"),
+      el("button", { class: "text-slate-300 hover:text-red-500 shrink-0", onclick: async () => {
         if (!confirm(`刪除「${d.name}」?`)) return;
         try { await db.deleteDeck(d.id); renderLibrary(); } catch (e) { toast(e.message); }
       } }, "🗑")));
@@ -152,12 +153,58 @@ async function renderProjects() {
           if (!confirm(`刪除專案「${p.name}」?(不會刪到單字本)`)) return;
           try { await db.deleteProject(p.id); renderProjects(); } catch (e) { toast(e.message); }
         } }, "🗑")),
-      el("button", { class: "mt-3 w-full bg-emerald-600 text-white rounded-lg py-2 font-medium", onclick: () => startSession({
-        direction: p.direction, deckIds: p.deck_ids, goalType: p.goal_type,
-        wordsPerDay: p.words_per_day, targetDate: p.target_date,
-        quickCount: p.goal_type === "none" ? 20 : undefined, projectId: p.id,
-      }) }, "繼續 →")));
+      el("div", { class: "mt-3 flex gap-2" },
+        el("button", { class: "flex-1 bg-emerald-600 text-white rounded-lg py-2 font-medium", onclick: () => startSession({
+          direction: p.direction, deckIds: p.deck_ids, goalType: p.goal_type,
+          wordsPerDay: p.words_per_day, targetDate: p.target_date,
+          quickCount: p.goal_type === "none" ? 20 : undefined, projectId: p.id,
+        }) }, "繼續 →"),
+        el("button", { class: "px-4 rounded-lg border text-sm text-slate-600 hover:bg-slate-50", onclick: () => renderProjectDetail(p.id) }, "查看單字"))));
   });
+}
+
+// ---------------- Detail views (查看單字) ----------------
+function reviewBadge(r) {
+  if (!r) return el("span", { class: "text-xs text-slate-400 shrink-0" }, "新");
+  const due = new Date(r.due_at);
+  const overdue = due <= new Date();
+  const md = `${due.getMonth() + 1}/${due.getDate()}`;
+  return el("span", { class: `text-xs shrink-0 ${overdue ? "text-amber-600" : "text-emerald-600"}` }, overdue ? "待複習" : `複習 ${md}`);
+}
+
+function renderCardsView(title, subtitle, cards, backFn) {
+  clear();
+  const wrap = el("div", { class: "max-w-2xl mx-auto p-5" });
+  app().append(wrap);
+  wrap.append(el("button", { class: "text-slate-500 text-sm mb-4", onclick: backFn }, "← 返回"));
+  wrap.append(el("h2", { class: "text-lg font-semibold" }, title));
+  if (subtitle) wrap.append(el("div", { class: "text-xs text-slate-400 mb-3" }, subtitle));
+  if (!cards.length) { wrap.append(el("p", { class: "text-slate-400 mt-2" }, "這裡還沒有單字。")); return; }
+  const list = el("div", { class: "divide-y border rounded-xl bg-white" });
+  cards.forEach((c) => {
+    list.append(el("div", { class: "p-3 flex items-start gap-3" },
+      el("div", { class: "flex-1 min-w-0" },
+        el("div", {}, el("span", { class: "font-medium" }, c.english),
+          c.pos ? el("span", { class: "ml-2 text-xs text-slate-400" }, c.pos) : null,
+          c.chinese_ai_filled ? el("span", { class: "ml-2 text-[10px] text-amber-600" }, "AI") : null),
+        el("div", { class: "text-sm text-slate-600" }, c.chinese),
+        c.example ? el("div", { class: "text-xs text-slate-400 mt-0.5 italic" }, c.example) : null),
+      reviewBadge(c.review)));
+  });
+  wrap.append(list);
+}
+
+async function renderDeckDetail(deckId) {
+  const deck = await db.getDeck(deckId);
+  const cards = await db.getCards([deckId]);
+  renderCardsView(deck ? deck.name : "單字本", `${cards.length} 字`, cards, renderLibrary);
+}
+
+async function renderProjectDetail(projectId) {
+  const proj = await db.getProject(projectId);
+  if (!proj) return renderProjects();
+  const cards = await db.getCards(proj.deck_ids);
+  renderCardsView(proj.name, `${cards.length} 字 · ${DIR_LABEL[proj.direction] || proj.direction} · ${goalLabel(proj)}`, cards, renderProjects);
 }
 
 // ---------------- Import ----------------
