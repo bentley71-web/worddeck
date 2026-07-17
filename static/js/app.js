@@ -94,7 +94,7 @@ async function renderLibrary() {
       cb,
       el("div", { class: "flex-1", onclick: () => cb.click() },
         el("div", { class: "font-medium" }, d.name),
-        el("div", { class: "text-sm text-slate-500" }, `${d.cardCount} 字`, d.dueCount ? el("span", { class: "ml-2 text-amber-600" }, `· ${d.dueCount} 待複習`) : null)),
+        el("div", { class: "text-sm text-slate-500" }, `${d.cardCount} 字`)),
       el("button", { class: "text-slate-300 hover:text-red-500", onclick: async () => {
         if (!confirm(`刪除「${d.name}」?`)) return;
         try { await db.deleteDeck(d.id); renderLibrary(); } catch (e) { toast(e.message); }
