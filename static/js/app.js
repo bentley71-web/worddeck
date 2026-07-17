@@ -1,5 +1,5 @@
-import * as db from "./db.js?v=3";
-import { buildQuestions, newWordBudget } from "./quiz.js?v=3";
+import * as db from "./db.js?v=5";
+import { buildQuestions, newWordBudget } from "./quiz.js?v=5";
 
 const REQUEUE_CAP = 2; // a wrong word re-appears at most this many times per session
 const app = () => document.getElementById("app");
@@ -43,9 +43,21 @@ async function api(path, { method = "POST", body, form } = {}) {
 
 // ---------------- Shell header ----------------
 function header() {
-  return el("header", { class: "flex items-center justify-between mb-6" },
-    el("h1", { class: "text-2xl font-bold cursor-pointer", onclick: renderLibrary }, "WordDeck"),
+  return el("header", { class: "flex items-center justify-between mb-4" },
+    el("h1", { class: "text-2xl font-bold cursor-pointer", onclick: boot }, "WordDeck"),
     el("span", { class: "text-xs text-slate-400" }, "本機模式 · 資料存在這台裝置"));
+}
+
+// two-tab nav; the 專案 tab shows a red badge = number of projects not done today
+function navBar(active, todoCount = 0) {
+  const tab = (label, key, onclick, badge) => {
+    const b = el("button", { class: `px-4 py-1.5 rounded-lg text-sm font-medium ${active === key ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`, onclick }, label);
+    if (badge) b.append(el("span", { class: "ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px]" }, String(badge)));
+    return b;
+  };
+  return el("div", { class: "flex gap-2 mb-5" },
+    tab("單字庫", "library", renderLibrary),
+    tab("專案", "projects", renderProjects, todoCount));
 }
 
 // ---------------- Library ----------------
@@ -53,6 +65,9 @@ async function renderLibrary() {
   clear();
   const wrap = el("div", { class: "max-w-3xl mx-auto p-5" }, header());
   app().append(wrap);
+  let todo = 0;
+  try { todo = (await db.listProjects()).filter((p) => !p.doneToday).length; } catch {}
+  wrap.append(navBar("library", todo));
   const list = el("div", { class: "space-y-3" }, el("p", { class: "text-slate-400" }, "載入中…"));
   wrap.append(
     el("div", { class: "flex justify-between items-center mb-4" },
@@ -84,6 +99,64 @@ async function renderLibrary() {
         if (!confirm(`刪除「${d.name}」?`)) return;
         try { await db.deleteDeck(d.id); renderLibrary(); } catch (e) { toast(e.message); }
       } }, "🗑")));
+  });
+}
+
+// ---------------- Projects ----------------
+const DIR_LABEL = { en2zh: "英→中", zh2en: "中→英", mixed: "混合" };
+function goalLabel(p) {
+  if (p.goal_type === "per_day") return `每天 ${p.words_per_day || 20} 字`;
+  if (p.goal_type === "by_date") return `${p.target_date || ""} 前完成`;
+  return "快速測驗";
+}
+
+async function renderProjects() {
+  clear();
+  const wrap = el("div", { class: "max-w-3xl mx-auto p-5" }, header());
+  app().append(wrap);
+  let projects;
+  try { projects = await db.listProjects(); }
+  catch (e) { wrap.append(navBar("projects", 0), el("p", { class: "text-red-500" }, "讀取失敗:" + e.message)); return; }
+  const todo = projects.filter((p) => !p.doneToday).length;
+  wrap.append(navBar("projects", todo));
+  wrap.append(el("h2", { class: "text-lg font-semibold mb-4" }, "我的專案"));
+
+  if (!projects.length) {
+    wrap.append(el("div", { class: "text-slate-500 text-sm space-y-2 border rounded-xl p-4 bg-white" },
+      el("p", { class: "font-medium text-slate-700" }, "還沒有專案"),
+      el("p", {}, "專案 = 記住你選好的「單字本範圍 + 出題方向 + 目標」,下次一鍵繼續,還會提醒你今天做了沒。"),
+      el("p", {}, "建立方式:到「單字庫」勾選單字本 → 開始 → 在練習設定填一個「專案名稱」即可。"),
+      el("button", { class: "mt-1 bg-blue-600 text-white rounded-lg px-4 py-2", onclick: renderLibrary }, "去單字庫建立")));
+    return;
+  }
+
+  // 今天還沒做的排前面
+  projects.sort((a, b) => (a.doneToday === b.doneToday ? 0 : a.doneToday ? 1 : -1));
+  const list = el("div", { class: "space-y-3" });
+  wrap.append(list);
+
+  projects.forEach((p) => {
+    const scope = p.deckNames.length
+      ? (p.deckNames.length <= 2 ? p.deckNames.join("、") : `${p.deckNames.length} 個單字本`)
+      : "(單字本已刪除)";
+    const status = p.doneToday
+      ? el("div", { class: "text-sm text-emerald-600 mt-1 font-medium" }, "✅ 今天已完成")
+      : el("div", { class: "text-sm text-red-500 mt-1 font-medium" }, `🔴 今天還沒做${p.dueCount ? ` · ${p.dueCount} 待複習` : ""}`);
+    list.append(el("div", { class: "border rounded-xl p-4 bg-white" },
+      el("div", { class: "flex items-start justify-between gap-3" },
+        el("div", { class: "flex-1 min-w-0" },
+          el("div", { class: "font-medium" }, p.name),
+          el("div", { class: "text-xs text-slate-500 mt-0.5" }, `${scope} · ${DIR_LABEL[p.direction] || p.direction} · ${goalLabel(p)}`),
+          status),
+        el("button", { class: "text-slate-300 hover:text-red-500 shrink-0", onclick: async () => {
+          if (!confirm(`刪除專案「${p.name}」?(不會刪到單字本)`)) return;
+          try { await db.deleteProject(p.id); renderProjects(); } catch (e) { toast(e.message); }
+        } }, "🗑")),
+      el("button", { class: "mt-3 w-full bg-emerald-600 text-white rounded-lg py-2 font-medium", onclick: () => startSession({
+        direction: p.direction, deckIds: p.deck_ids, goalType: p.goal_type,
+        wordsPerDay: p.words_per_day, targetDate: p.target_date,
+        quickCount: p.goal_type === "none" ? 20 : undefined, projectId: p.id,
+      }) }, "繼續 →")));
   });
 }
 
@@ -222,6 +295,7 @@ function renderStudySetup(deckIds) {
   wrap.append(el("button", { class: "text-slate-500 text-sm mb-4", onclick: renderLibrary }, "← 返回"));
   wrap.append(el("h2", { class: "text-lg font-semibold mb-4" }, "設定這次的練習"));
 
+  const nameInput = el("input", { class: "border rounded-lg px-3 py-2 w-full", placeholder: "例如:多益 Day1(選填)" });
   const perDay = el("input", { type: "number", value: "20", class: "border rounded px-2 py-1 w-24" });
   const byDate = el("input", { type: "date", class: "border rounded px-2 py-1" });
   const quickCount = el("input", { type: "number", value: "20", class: "border rounded px-2 py-1 w-24" });
@@ -243,13 +317,16 @@ function renderStudySetup(deckIds) {
   const quickBox = el("div", { class: "text-sm hidden" }, el("label", { class: "flex items-center gap-2" }, "這次考 ", quickCount, " 題"));
 
   wrap.append(
+    el("div", { class: "mb-5" },
+      el("div", { class: "text-sm font-medium mb-2" }, "專案名稱(選填 — 填了就存起來,下次在「專案」一鍵繼續)"),
+      nameInput),
     radioGroup("出題方向", [{ v: "en2zh", t: "英→中" }, { v: "zh2en", t: "中→英" }, { v: "mixed", t: "混合" }], dir),
     radioGroup("模式", [{ v: "scheduled", t: "間隔複習排程" }, { v: "quick", t: "快速測驗" }], md, (v) => {
       schedBox.classList.toggle("hidden", v !== "scheduled");
       quickBox.classList.toggle("hidden", v !== "quick");
     }),
     schedBox, quickBox,
-    el("button", { class: "mt-6 w-full bg-emerald-600 text-white rounded-lg py-2.5 font-medium", onclick: () => {
+    el("button", { class: "mt-6 w-full bg-emerald-600 text-white rounded-lg py-2.5 font-medium", onclick: async (e) => {
       const cfg = { direction: dir.v, deckIds };
       if (md.v === "scheduled") {
         cfg.goalType = goalType;
@@ -258,6 +335,14 @@ function renderStudySetup(deckIds) {
       } else {
         cfg.goalType = "none";
         cfg.quickCount = parseInt(quickCount.value) || 20;
+      }
+      const pname = nameInput.value.trim();
+      if (pname) {
+        e.target.disabled = true;
+        try {
+          const proj = await db.saveProject(pname, deckIds, cfg.direction, cfg.goalType, cfg.wordsPerDay, cfg.targetDate);
+          cfg.projectId = proj.id;
+        } catch (err) { /* non-fatal: still start the session */ }
       }
       startSession(cfg);
     } }, "開始"));
@@ -283,7 +368,7 @@ async function startSession(cfg) {
       return;
     }
     const questions = await buildQuestions(cards, cfg.direction, db.getToken);
-    state.session = { questions, idx: 0, score: 0, attempts: [], answered: new Set(), requeue: {}, wrong: [], direction: cfg.direction, total: questions.length };
+    state.session = { questions, idx: 0, score: 0, attempts: [], answered: new Set(), requeue: {}, wrong: [], direction: cfg.direction, total: questions.length, projectId: cfg.projectId || null };
     renderQuestion();
   } catch (e) {
     clear();
@@ -344,6 +429,7 @@ async function renderResults() {
   const s = state.session;
   clear();
   try { await db.saveQuizResult(s.direction, s.score, s.total, s.attempts); } catch (e) { /* non-fatal */ }
+  if (s.projectId) { try { await db.touchProjectStudied(s.projectId); } catch (e) { /* non-fatal */ } }
   const wrap = el("div", { class: "max-w-md mx-auto p-5 text-center" });
   app().append(wrap);
   const pct = s.total ? Math.round((s.score / s.total) * 100) : 0;
@@ -357,8 +443,15 @@ async function renderResults() {
     s.wrong.forEach((w) => box.append(el("div", { class: "text-sm py-1 border-b last:border-0" }, `${w.prompt} → ${w.answer}`)));
     wrap.append(box);
   }
-  wrap.append(el("button", { class: "w-full bg-blue-600 text-white rounded-lg py-2.5 font-medium", onclick: renderLibrary }, "完成,回單字庫"));
+  wrap.append(s.projectId
+    ? el("button", { class: "w-full bg-blue-600 text-white rounded-lg py-2.5 font-medium", onclick: renderProjects }, "完成,回專案")
+    : el("button", { class: "w-full bg-blue-600 text-white rounded-lg py-2.5 font-medium", onclick: renderLibrary }, "完成,回單字庫"));
 }
 
 // ---------------- Boot (no login — straight into the app) ----------------
-renderLibrary();
+async function boot() {
+  let hasProjects = false;
+  try { hasProjects = (await db.listProjects()).length > 0; } catch {}
+  hasProjects ? renderProjects() : renderLibrary();
+}
+boot();
